@@ -29,10 +29,10 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 90
     env:
-      ZIG_LOCAL_CACHE_DIR: ${{ runner.temp }}/zig-local-cache
-      ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-global-cache
-      DERIVED_DATA_DIR: ${{ runner.temp }}/ghostty-derived-data
-      BUILD_DIR: ${{ runner.temp }}/ghostty-build
+      ZIG_LOCAL_CACHE_DIR: /tmp/zig-local-cache
+      ZIG_GLOBAL_CACHE_DIR: /tmp/zig-global-cache
+      DERIVED_DATA_DIR: /tmp/ghostty-derived-data
+      BUILD_DIR: /tmp/ghostty-build
       DMG_NAME: ghostty-macos-arm64-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}.dmg
     steps:
       - name: Checkout code
