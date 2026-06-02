@@ -5,6 +5,8 @@ import SwiftUI
 /// Modifying `NSThemeFrame` can sometimes be unpredictable.
 class TerminalViewContainer: NSView {
     private let terminalView: NSView
+    private var verticalTabBar: TerminalVerticalTabBar?
+    private var terminalConstraints: [NSLayoutConstraint] = []
 
     /// Combined glass effect and inactive tint overlay view
     private(set) var glassEffectView: NSView?
@@ -45,22 +47,28 @@ class TerminalViewContainer: NSView {
         // with the correct idealWidth/idealHeight. Before that (when
         // @FocusedValue hasn't propagated), it returns a tiny default.
         // Fall back to initialContentSize in that case.
+        let terminalSize: NSSize
         if let initialContentSize,
            hostingSize.width < initialContentSize.width || hostingSize.height < initialContentSize.height {
-            return initialContentSize
+            terminalSize = initialContentSize
+        } else {
+            terminalSize = hostingSize
         }
-        return hostingSize
+
+        if let verticalTabBar {
+            return .init(
+                width: terminalSize.width + verticalTabBar.preferredWidth,
+                height: terminalSize.height
+            )
+        }
+
+        return terminalSize
     }
 
     private func setup() {
         addSubview(terminalView)
         terminalView.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            terminalView.topAnchor.constraint(equalTo: topAnchor),
-            terminalView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            terminalView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
-        ])
+        updateTerminalConstraints()
     }
 
     override func viewDidMoveToWindow() {
@@ -79,6 +87,71 @@ class TerminalViewContainer: NSView {
         guard newValue != derivedConfig else { return }
         derivedConfig = newValue
         DispatchQueue.main.async(execute: updateGlassEffectIfNeeded)
+    }
+
+    func configureVerticalTabBar(position: Ghostty.Config.MacOSTabBarPosition, hostWindow terminalWindow: TerminalWindow) {
+        switch position {
+        case .top:
+            verticalTabBar?.removeFromSuperview()
+            verticalTabBar = nil
+        case .left, .right:
+            let sidebarPosition: TerminalVerticalTabBar.Position = position == .left ? .left : .right
+            if let verticalTabBar {
+                verticalTabBar.removeFromSuperview()
+                self.verticalTabBar = nil
+            }
+
+            let tabBar = TerminalVerticalTabBar(hostWindow: terminalWindow, position: sidebarPosition)
+            addSubview(tabBar, positioned: .above, relativeTo: terminalView)
+            verticalTabBar = tabBar
+        }
+
+        updateTerminalConstraints()
+        reloadVerticalTabBar()
+        terminalWindow.syncNativeTabBarVisibility()
+    }
+
+    func reloadVerticalTabBar() {
+        verticalTabBar?.reload()
+    }
+
+    private func updateTerminalConstraints() {
+        NSLayoutConstraint.deactivate(terminalConstraints)
+        terminalConstraints.removeAll()
+
+        terminalConstraints.append(contentsOf: [
+            terminalView.topAnchor.constraint(equalTo: topAnchor),
+            terminalView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        if let verticalTabBar {
+            terminalConstraints.append(contentsOf: [
+                verticalTabBar.topAnchor.constraint(equalTo: topAnchor),
+                verticalTabBar.bottomAnchor.constraint(equalTo: bottomAnchor),
+            ])
+
+            switch verticalTabBar.position {
+            case .left:
+                terminalConstraints.append(contentsOf: [
+                    verticalTabBar.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    terminalView.leadingAnchor.constraint(equalTo: verticalTabBar.trailingAnchor),
+                    terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
+                ])
+            case .right:
+                terminalConstraints.append(contentsOf: [
+                    terminalView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                    terminalView.trailingAnchor.constraint(equalTo: verticalTabBar.leadingAnchor),
+                    verticalTabBar.trailingAnchor.constraint(equalTo: trailingAnchor),
+                ])
+            }
+        } else {
+            terminalConstraints.append(contentsOf: [
+                terminalView.leadingAnchor.constraint(equalTo: leadingAnchor),
+                terminalView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            ])
+        }
+
+        NSLayoutConstraint.activate(terminalConstraints)
     }
 }
 

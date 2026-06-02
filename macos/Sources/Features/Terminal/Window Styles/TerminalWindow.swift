@@ -37,6 +37,8 @@ class TerminalWindow: NSWindow {
     /// Sets up our tab context menu
     private var tabMenuObserver: NSObjectProtocol?
 
+    private var hiddenNativeTabBarHeightConstraints: [NSLayoutConstraint] = []
+
     /// Handles inline tab title editing for this host window.
     private(set) lazy var tabTitleEditor = TabTitleEditor(
         hostWindow: self,
@@ -308,6 +310,8 @@ class TerminalWindow: NSWindow {
     }
 
     private func tabBarDidAppear() {
+        syncNativeTabBarVisibility()
+
         // Remove our reset zoom accessory. For some reason having a SwiftUI
         // titlebar accessory causes our content view scaling to be wrong.
         // Removing it fixes it, we just need to remember to add it again later.
@@ -320,11 +324,44 @@ class TerminalWindow: NSWindow {
     }
 
     private func tabBarDidDisappear() {
+        NSLayoutConstraint.deactivate(hiddenNativeTabBarHeightConstraints)
+        hiddenNativeTabBarHeightConstraints.removeAll()
+
         if styleMask.contains(.titled) {
             if titlebarAccessoryViewControllers.firstIndex(of: resetZoomAccessory) == nil {
                 addTitlebarAccessoryViewController(resetZoomAccessory)
             }
         }
+    }
+
+    func syncNativeTabBarVisibility() {
+        let accessoryView = titlebarAccessoryViewControllers
+            .first(where: { $0.identifier == Self.tabBarIdentifier })?
+            .view
+
+        guard derivedConfig.macosTabBarPosition != .top else {
+            tabBarView?.isHidden = false
+            accessoryView?.isHidden = false
+            NSLayoutConstraint.deactivate(hiddenNativeTabBarHeightConstraints)
+            hiddenNativeTabBarHeightConstraints.removeAll()
+            return
+        }
+
+        NSLayoutConstraint.deactivate(hiddenNativeTabBarHeightConstraints)
+        hiddenNativeTabBarHeightConstraints = [tabBarView, accessoryView]
+            .compactMap { $0 }
+            .map { view in
+                view.isHidden = true
+                let constraint = view.heightAnchor.constraint(equalToConstant: 0)
+                constraint.priority = .required
+                return constraint
+            }
+        NSLayoutConstraint.activate(hiddenNativeTabBarHeightConstraints)
+    }
+
+    func syncDerivedConfig(_ config: Ghostty.Config) {
+        derivedConfig = .init(config)
+        syncNativeTabBarVisibility()
     }
 
     // MARK: Tab Key Equivalents
@@ -402,6 +439,9 @@ class TerminalWindow: NSWindow {
             /// Check ``titlebarFont`` down below
             /// to see why we need to check `hasMoreThanOneTabs` here
             titlebarTextField?.usesSingleLineMode = !hasMoreThanOneTabs
+            DispatchQueue.main.async { [weak self] in
+                self?.terminalController?.reloadVerticalTabBarsInGroup()
+            }
         }
     }
 
@@ -588,6 +628,7 @@ class TerminalWindow: NSWindow {
         let backgroundOpacity: Double
         let macosWindowButtons: Ghostty.MacOSWindowButtons
         let macosTitlebarStyle: Ghostty.Config.MacOSTitlebarStyle
+        let macosTabBarPosition: Ghostty.Config.MacOSTabBarPosition
         let windowCornerRadius: CGFloat
 
         init() {
@@ -597,6 +638,7 @@ class TerminalWindow: NSWindow {
             self.macosWindowButtons = .visible
             self.backgroundBlur = .disabled
             self.macosTitlebarStyle = .default
+            self.macosTabBarPosition = .top
             self.windowCornerRadius = 16
         }
 
@@ -607,6 +649,7 @@ class TerminalWindow: NSWindow {
             self.macosWindowButtons = config.macosWindowButtons
             self.backgroundBlur = config.backgroundBlur
             self.macosTitlebarStyle = config.macosTitlebarStyle
+            self.macosTabBarPosition = config.macosTabBarPosition
 
             // Set corner radius based on macos-titlebar-style
             // Native, transparent, and hidden styles use 16pt radius

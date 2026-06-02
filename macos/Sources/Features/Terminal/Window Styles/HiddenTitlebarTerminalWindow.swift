@@ -60,8 +60,12 @@ class HiddenTitlebarTerminalWindow: TerminalWindow {
         standardWindowButton(.miniaturizeButton)?.isHidden = true
         standardWindowButton(.zoomButton)?.isHidden = true
 
-        // Disallow tabbing if the titlebar is hidden, since that will (should) also hide the tab bar.
-        tabbingMode = .disallowed
+        // Disallow tabbing if the titlebar is hidden, since that will (should)
+        // also hide the native tab bar. Vertical tab bars provide their own tab
+        // UI, so keep native tab groups enabled for them.
+        if derivedConfig.macosTabBarPosition == .top {
+            tabbingMode = .disallowed
+        }
 
         // Nuke it from orbit -- hide the titlebar container entirely, just in case. There are
         // some operations that appear to bring back the titlebar visibility so this ensures

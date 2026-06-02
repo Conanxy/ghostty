@@ -18,7 +18,18 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
             return defaultValue
         }
 
-        let nib = switch config.macosTitlebarStyle {
+        let titlebarStyle = if config.macosTabBarPosition == .top {
+            config.macosTitlebarStyle
+        } else {
+            switch config.macosTitlebarStyle {
+            case .tabs:
+                Ghostty.Config.MacOSTitlebarStyle.transparent
+            default:
+                config.macosTitlebarStyle
+            }
+        }
+
+        let nib = switch titlebarStyle {
         case .native: "Terminal"
         case .hidden: "TerminalHiddenTitlebar"
         case .transparent: "TerminalTransparentTitlebar"
@@ -541,6 +552,13 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         if notification.object == nil {
             // Update our derived config
             self.derivedConfig = DerivedConfig(config)
+            if let window = window as? TerminalWindow {
+                window.syncDerivedConfig(config)
+                terminalViewContainer?.configureVerticalTabBar(
+                    position: config.macosTabBarPosition,
+                    hostWindow: window
+                )
+            }
 
             // If we have no surfaces in our window (is that possible?) then we update
             // our window appearance based on the root config. If we have surfaces, we
@@ -580,6 +598,16 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
                     window.keyEquivalent = ""
                 }
             }
+        }
+
+        reloadVerticalTabBarsInGroup()
+    }
+
+    func reloadVerticalTabBarsInGroup() {
+        guard let window else { return }
+        let windows = window.tabGroup?.windows ?? [window]
+        windows.forEach { window in
+            (window.windowController as? TerminalController)?.terminalViewContainer?.reloadVerticalTabBar()
         }
     }
 
@@ -1089,6 +1117,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         container.initialContentSize = focusedSurface?.initialSize
 
         window.contentView = container
+        if let terminalWindow = window as? TerminalWindow {
+            container.configureVerticalTabBar(position: config.macosTabBarPosition, hostWindow: terminalWindow)
+        }
 
         // If we have a default size, we want to apply it.
         if let defaultSize {
@@ -1187,6 +1218,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         super.windowWillClose(notification)
         cancelPendingInitialPresentation()
         self.relabelTabs()
+        DispatchQueue.main.async {
+            self.reloadVerticalTabBarsInGroup()
+        }
 
         // If we remove a window, we reset the cascade point to the key window so that
         // the next window cascade's from that one.
@@ -1222,6 +1256,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         super.windowDidBecomeKey(notification)
         self.relabelTabs()
         self.fixTabBar()
+        reloadVerticalTabBarsInGroup()
         terminalViewContainer?.updateGlassTintOverlay(isKeyWindow: true)
     }
 
@@ -1250,6 +1285,7 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
         // restart. This differs from Terminal.app but matches iTerm2 behavior
         // and I think its sensible.
         LastWindowPosition.shared.save(window)
+        reloadVerticalTabBarsInGroup()
 
         // Remember our last main
         Self.lastMain = self

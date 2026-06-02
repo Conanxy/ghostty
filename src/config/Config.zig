@@ -3260,6 +3260,22 @@ keybind: Keybinds = .{},
 /// Changing this option at runtime only applies to new windows.
 @"macos-titlebar-style": MacTitlebarStyle = .transparent,
 
+/// The position of the macOS tab bar. This only affects the native macOS app.
+///
+/// Valid values are:
+///
+///   * `top` - Use the normal macOS tab bar at the top of the window.
+///   * `left` - Show Ghostty's tab bar vertically on the left side of the
+///     terminal content.
+///   * `right` - Show Ghostty's tab bar vertically on the right side of the
+///     terminal content.
+///
+/// The default value is `top`.
+///
+/// Changing this option at runtime applies to all macOS windows after
+/// reloading the configuration.
+@"macos-tab-bar-position": MacTabBarPosition = .top,
+
 /// Whether the proxy icon in the macOS titlebar is visible. The proxy icon
 /// is the icon that represents the folder of the current working directory.
 /// You can see this very clearly in the macOS built-in Terminal.app
@@ -8996,6 +9012,13 @@ pub const MacTitlebarStyle = enum {
     transparent,
     tabs,
     hidden,
+};
+
+/// See macos-tab-bar-position
+pub const MacTabBarPosition = enum {
+    top,
+    left,
+    right,
 };
 
 /// See macos-titlebar-proxy-icon
