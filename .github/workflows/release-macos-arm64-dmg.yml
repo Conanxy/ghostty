@@ -1,0 +1,154 @@
+name: Release macOS ARM64 DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update"
+        required: true
+        default: "tabbar-preview-0.1"
+      prerelease:
+        description: "Mark the GitHub release as a pre-release"
+        required: true
+        default: true
+        type: boolean
+  push:
+    tags:
+      - "tabbar-preview-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-macos-arm64-dmg-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build macOS ARM64 DMG
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      ZIG_LOCAL_CACHE_DIR: ${{ runner.temp }}/zig-local-cache
+      ZIG_GLOBAL_CACHE_DIR: ${{ runner.temp }}/zig-global-cache
+      DERIVED_DATA_DIR: ${{ runner.temp }}/ghostty-derived-data
+      BUILD_DIR: ${{ runner.temp }}/ghostty-build
+      DMG_NAME: ghostty-macos-arm64-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}.dmg
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Get required Zig version
+        id: zig
+        run: |
+          echo "version=$(sed -n -E 's/^\s*\.?minimum_zig_version\s*=\s*"([^"]+)".*/\1/p' build.zig.zon)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Zig
+        env:
+          ZIG_VERSION: ${{ steps.zig.outputs.version }}
+        run: |
+          curl -fL "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-macos-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-aarch64-macos-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Xcode Version
+        run: xcodebuild -version
+
+      - name: Prepare build cache directories
+        run: |
+          mkdir -p "$ZIG_LOCAL_CACHE_DIR" "$ZIG_GLOBAL_CACHE_DIR" "$DERIVED_DATA_DIR" "$BUILD_DIR"
+
+      - name: Build GhosttyKit
+        run: |
+          zig build \
+            --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
+            --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
+            -Doptimize=ReleaseFast \
+            -Dtarget=aarch64-macos \
+            -Dxcframework-target=native \
+            -Demit-macos-app=false
+
+      - name: Build Ghostty.app
+        run: |
+          xcodebuild \
+            -project macos/Ghostty.xcodeproj \
+            -scheme Ghostty \
+            -configuration ReleaseLocal \
+            -derivedDataPath "$DERIVED_DATA_DIR" \
+            SYMROOT="$BUILD_DIR" \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=YES \
+            build
+
+      - name: Verify app
+        run: |
+          file "$BUILD_DIR/ReleaseLocal/Ghostty.app/Contents/MacOS/ghostty"
+          "$BUILD_DIR/ReleaseLocal/Ghostty.app/Contents/MacOS/ghostty" --version
+          codesign --verify --deep --strict --verbose=4 "$BUILD_DIR/ReleaseLocal/Ghostty.app"
+
+      - name: Create DMG
+        run: |
+          npm install --global create-dmg
+          rm -f Ghostty*.dmg "$DMG_NAME"
+          create-dmg \
+            --volname "Ghostty" \
+            --window-pos 200 120 \
+            --window-size 660 420 \
+            --icon-size 96 \
+            --icon "Ghostty.app" 180 170 \
+            --app-drop-link 480 170 \
+            "$BUILD_DIR/ReleaseLocal/Ghostty.app" \
+            ./
+
+          shopt -s nullglob
+          generated=(Ghostty*.dmg)
+          if [[ ${#generated[@]} -ne 1 ]]; then
+            printf 'Expected exactly one generated DMG, found %s\n' "${#generated[@]}"
+            exit 1
+          fi
+          mv "${generated[0]}" "$DMG_NAME"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ghostty-macos-arm64-dmg
+          path: ${{ env.DMG_NAME }}
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          cat > release-notes.md <<'EOF'
+          macOS Apple Silicon DMG for the configurable tab bar preview.
+
+          This build is produced by GitHub Actions from commit `${{ github.sha }}`.
+
+          Notes:
+          - Apple Silicon only (`arm64`).
+          - Built with the local release signing configuration. If this repository has no Developer ID notarization secrets configured, macOS may still require the first launch to be approved manually.
+          EOF
+
+          PRERELEASE="${INPUT_PRERELEASE:-true}"
+          release_flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            release_flags+=(--prerelease)
+          fi
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "macOS ARM64 tab bar preview $RELEASE_TAG" \
+              --notes-file release-notes.md \
+              "${release_flags[@]}"
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "macOS ARM64 tab bar preview $RELEASE_TAG" \
+              --notes-file release-notes.md \
+              "${release_flags[@]}"
+          fi
+
+          gh release upload "$RELEASE_TAG" "$DMG_NAME" --clobber
