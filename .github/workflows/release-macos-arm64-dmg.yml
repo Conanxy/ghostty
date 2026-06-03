@@ -57,10 +57,15 @@ jobs:
 
       - name: Build GhosttyKit
         run: |
+          APP_VERSION="$(awk -F'"' '/\.version =/ { print $2; exit }' build.zig.zon)"
+          BUILD_VERSION="${APP_VERSION}+tabbar.${GITHUB_SHA:0:8}"
+          printf 'Building Ghostty version %s\n' "$BUILD_VERSION"
+
           nix develop -c zig build \
             --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
             --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
             -Doptimize=ReleaseFast \
+            -Dversion-string="$BUILD_VERSION" \
             -Dxcframework-target=native \
             -Demit-macos-app=false
 
