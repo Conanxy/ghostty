@@ -40,18 +40,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get required Zig version
-        id: zig
-        run: |
-          echo "version=$(awk -F '"' '/minimum_zig_version/ { print $2; exit }' build.zig.zon)" >> "$GITHUB_OUTPUT"
+      - name: Install Nix
+        uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
 
-      - name: Setup Zig
-        env:
-          ZIG_VERSION: ${{ steps.zig.outputs.version }}
-        run: |
-          curl -fL "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-macos-${ZIG_VERSION}.tar.xz" -o "$RUNNER_TEMP/zig.tar.xz"
-          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/zig-aarch64-macos-${ZIG_VERSION}" >> "$GITHUB_PATH"
+      - name: Setup Cachix
+        uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: ghostty
 
       - name: Xcode Version
         run: xcodebuild -version
@@ -62,7 +57,7 @@ jobs:
 
       - name: Build GhosttyKit
         run: |
-          zig build \
+          nix develop -c zig build \
             --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
             --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
             -Doptimize=ReleaseFast \
