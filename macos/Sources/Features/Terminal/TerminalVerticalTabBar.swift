@@ -480,11 +480,6 @@ private final class TerminalVerticalTabButton: NSView, NSTextFieldDelegate {
             finishInlineTitleEdit(commit: true)
         }
 
-        if event.clickCount >= 2 {
-            beginInlineTitleEdit()
-            return
-        }
-
         let startLocation = event.locationInWindow
         var didDrag = false
 
