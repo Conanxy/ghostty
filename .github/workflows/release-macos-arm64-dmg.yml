@@ -43,7 +43,7 @@ jobs:
       - name: Get required Zig version
         id: zig
         run: |
-          echo "version=$(sed -n -E 's/^\s*\.?minimum_zig_version\s*=\s*"([^"]+)".*/\1/p' build.zig.zon)" >> "$GITHUB_OUTPUT"
+          echo "version=$(awk -F '"' '/minimum_zig_version/ { print $2; exit }' build.zig.zon)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Zig
         env:
