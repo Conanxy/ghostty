@@ -66,7 +66,6 @@ jobs:
             --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR" \
             --cache-dir "$ZIG_LOCAL_CACHE_DIR" \
             -Doptimize=ReleaseFast \
-            -Dtarget=aarch64-macos \
             -Dxcframework-target=native \
             -Demit-macos-app=false
 
