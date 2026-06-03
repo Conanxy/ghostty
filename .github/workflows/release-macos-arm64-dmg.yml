@@ -6,15 +6,16 @@ on:
       tag:
         description: "Release tag to create or update"
         required: true
-        default: "tabbar-preview-0.1"
+        default: "0.0.2"
       prerelease:
         description: "Mark the GitHub release as a pre-release"
         required: true
-        default: true
+        default: false
         type: boolean
   push:
     tags:
       - "tabbar-preview-*"
+      - "0.0.*"
 
 permissions:
   contents: write
@@ -117,16 +118,43 @@ jobs:
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
           cat > release-notes.md <<'EOF'
-          macOS Apple Silicon DMG for the configurable tab bar preview.
+          macOS Apple Silicon DMG for Ghostty tab bar customization.
 
           This build is produced by GitHub Actions from commit `${{ github.sha }}`.
+
+          Changes:
+          - Adds `macos-tab-bar-position` for changing the macOS tab bar position.
+          - Supports `top`, `left`, and `right` tab bar positions.
+          - Adds vertical tab bars for `left` and `right`.
+          - Supports runtime switching with `Ghostty -> Reload Configuration`.
+          - Supports scrolling when there are many vertical tabs.
+          - Supports vertical tab drag reordering.
+          - Supports dragging a vertical tab out to create a new window, with a floating drag preview.
+          - Supports resizing the vertical tab bar by dragging the divider between the tab bar and terminal.
+          - Adds vertical tab context menu actions: close tab, close other tabs, close tabs to the right, close all tabs, and rename tab.
+          - Fixes native top tab bar spacing when switching between top and vertical tab positions.
+          - Rewrites the README to document this fork and its changes only.
+
+          To change the tab bar position, edit:
+
+          `$HOME/Library/Application Support/com.mitchellh.ghostty/config.ghostty`
+
+          Add one of:
+
+          ```text
+          macos-tab-bar-position = top
+          macos-tab-bar-position = left
+          macos-tab-bar-position = right
+          ```
+
+          Then use `Ghostty -> Reload Configuration` to apply the change without restarting.
 
           Notes:
           - Apple Silicon only (`arm64`).
           - Built with the local release signing configuration. If this repository has no Developer ID notarization secrets configured, macOS may still require the first launch to be approved manually.
           EOF
 
-          PRERELEASE="${INPUT_PRERELEASE:-true}"
+          PRERELEASE="${INPUT_PRERELEASE:-false}"
           release_flags=()
           if [[ "$PRERELEASE" == "true" ]]; then
             release_flags+=(--prerelease)
@@ -134,13 +162,13 @@ jobs:
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
-              --title "macOS ARM64 tab bar preview $RELEASE_TAG" \
+              --title "Ghostty tab bar customization $RELEASE_TAG" \
               --notes-file release-notes.md \
               "${release_flags[@]}"
           else
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
-              --title "macOS ARM64 tab bar preview $RELEASE_TAG" \
+              --title "Ghostty tab bar customization $RELEASE_TAG" \
               --notes-file release-notes.md \
               "${release_flags[@]}"
           fi

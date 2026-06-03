@@ -6,7 +6,9 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
         case right
     }
 
-    static let width: CGFloat = 180
+    static let defaultWidth: CGFloat = 180
+    static let minWidth: CGFloat = 120
+    static let maxWidth: CGFloat = 320
     static let rowHeight: CGFloat = 32
 
     private weak var hostWindow: TerminalWindow?
@@ -14,17 +16,22 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
     private let stackView = NSStackView()
     private let scrollView = NSScrollView()
     private let separator = NSBox()
+    private let resizeHandle: TerminalVerticalTabResizeHandle
     private let newTabButton = NSButton()
     private let dropIndicator = NSView()
+    private var widthConstraint: NSLayoutConstraint?
     private var dropIndicatorTopConstraint: NSLayoutConstraint?
+    private var reloadScheduled = false
 
-    var preferredWidth: CGFloat { Self.width }
+    var preferredWidth: CGFloat { widthConstraint?.constant ?? Self.defaultWidth }
 
     init(hostWindow: TerminalWindow, position: Position) {
         self.hostWindow = hostWindow
         self.position = position
+        self.resizeHandle = TerminalVerticalTabResizeHandle(position: position)
         super.init(frame: .zero)
 
+        resizeHandle.tabBar = self
         setup()
         reload()
     }
@@ -35,14 +42,35 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
     }
 
     func reload() {
+        guard let hostWindow else { return }
+        let windows = hostWindow.tabGroup?.windows ?? [hostWindow]
+        let selectedWindow = hostWindow.tabGroup?.selectedWindow ?? hostWindow
+
+        let existingItems = stackView.arrangedSubviews.compactMap { $0 as? TerminalVerticalTabButton }
+        let canReuseItems =
+            existingItems.count == stackView.arrangedSubviews.count &&
+            existingItems.count == windows.count &&
+            zip(existingItems, windows).allSatisfy { pair in
+                pair.0.representedWindow === pair.1
+            }
+
+        if canReuseItems {
+            for (index, item) in existingItems.enumerated() {
+                let window = windows[index]
+                item.update(
+                    title: tabTitle(for: window, index: index),
+                    isSelected: window === selectedWindow
+                )
+            }
+
+            isHidden = false
+            return
+        }
+
         stackView.arrangedSubviews.forEach { view in
             stackView.removeArrangedSubview(view)
             view.removeFromSuperview()
         }
-
-        guard let hostWindow else { return }
-        let windows = hostWindow.tabGroup?.windows ?? [hostWindow]
-        let selectedWindow = hostWindow.tabGroup?.selectedWindow ?? hostWindow
 
         for (index, window) in windows.enumerated() {
             let item = TerminalVerticalTabButton(
@@ -59,12 +87,41 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
         isHidden = false
     }
 
+    func scheduleReload() {
+        guard !reloadScheduled else { return }
+        reloadScheduled = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            reloadScheduled = false
+            reload()
+        }
+    }
+
+    fileprivate func resize(by deltaX: CGFloat) {
+        guard let widthConstraint else { return }
+
+        let directionMultiplier: CGFloat = position == .left ? 1 : -1
+        let proposedWidth = widthConstraint.constant + deltaX * directionMultiplier
+        let newWidth = min(max(proposedWidth, Self.minWidth), Self.maxWidth)
+        guard newWidth != widthConstraint.constant else { return }
+
+        widthConstraint.constant = newWidth
+        invalidateIntrinsicContentSize()
+        superview?.layoutSubtreeIfNeeded()
+    }
+
     fileprivate func dropIndex(for event: NSEvent) -> Int? {
         guard let documentView = scrollView.documentView else { return nil }
         return dropIndex(
             forDocumentLocation: documentView.convert(event.locationInWindow, from: nil),
             in: documentView
         )
+    }
+
+    fileprivate func canReorder(at event: NSEvent) -> Bool {
+        let location = convert(event.locationInWindow, from: nil)
+        return bounds.insetBy(dx: -24, dy: -24).contains(location)
     }
 
     private func dropIndex(forDocumentLocation location: NSPoint, in documentView: NSView) -> Int {
@@ -79,7 +136,12 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
     }
 
     fileprivate func showDropIndicator(for event: NSEvent) {
-        guard let documentView = scrollView.documentView else { return }
+        guard canReorder(at: event),
+              let documentView = scrollView.documentView else {
+            hideDropIndicator()
+            return
+        }
+
         let location = documentView.convert(event.locationInWindow, from: nil)
         let dropIndex = dropIndex(forDocumentLocation: location, in: documentView)
 
@@ -142,6 +204,37 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
         (window.windowController as? TerminalController)?.relabelTabs()
     }
 
+    fileprivate func detachTab(_ window: NSWindow, at event: NSEvent) {
+        guard let hostWindow,
+              let tabGroup = hostWindow.tabGroup,
+              tabGroup.windows.count > 1,
+              tabGroup.windows.contains(where: { $0 === window })
+        else { return }
+
+        let remainingController = tabGroup.windows
+            .first(where: { $0 !== window })?
+            .windowController as? TerminalController
+
+        let screenPoint = self.window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+        var frame = window.frame
+        let horizontalOffset = min(max(frame.width * 0.25, 80), 220)
+        let verticalOffset: CGFloat = 28
+        frame.origin.x = screenPoint.x - horizontalOffset
+        frame.origin.y = screenPoint.y + verticalOffset - frame.height
+
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        defer { NSAnimationContext.endGrouping() }
+
+        tabGroup.removeWindow(window)
+        window.setFrame(frame, display: true)
+        window.constrainToScreen()
+        window.makeKeyAndOrderFront(nil)
+
+        remainingController?.relabelTabs()
+        (window.windowController as? TerminalController)?.relabelTabs()
+    }
+
     private func setup() {
         material = .sidebar
         blendingMode = .withinWindow
@@ -163,7 +256,7 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
         stackView.orientation = .vertical
         stackView.alignment = .width
         stackView.spacing = 2
-        stackView.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        stackView.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 8, right: 8)
 
         let documentView = FlippedView()
         documentView.translatesAutoresizingMaskIntoConstraints = false
@@ -180,10 +273,12 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
 
         separator.translatesAutoresizingMaskIntoConstraints = false
         separator.boxType = .separator
+        resizeHandle.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(scrollView)
         contentView.addSubview(newTabButton)
         contentView.addSubview(separator)
+        contentView.addSubview(resizeHandle)
         addSubview(dropIndicator)
         dropIndicator.translatesAutoresizingMaskIntoConstraints = false
         dropIndicator.wantsLayer = true
@@ -193,9 +288,11 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
 
         dropIndicatorTopConstraint = dropIndicator.topAnchor.constraint(equalTo: topAnchor)
 
-        NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: Self.width),
+        let widthConstraint = widthAnchor.constraint(equalToConstant: Self.defaultWidth)
+        self.widthConstraint = widthConstraint
 
+        NSLayoutConstraint.activate([
+            widthConstraint,
             contentView.topAnchor.constraint(equalTo: topAnchor),
             contentView.leadingAnchor.constraint(equalTo: leadingAnchor),
             contentView.bottomAnchor.constraint(equalTo: bottomAnchor),
@@ -233,6 +330,11 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
                 separator.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
                 separator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
                 separator.widthAnchor.constraint(equalToConstant: 1),
+
+                resizeHandle.topAnchor.constraint(equalTo: contentView.topAnchor),
+                resizeHandle.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+                resizeHandle.centerXAnchor.constraint(equalTo: separator.centerXAnchor),
+                resizeHandle.widthAnchor.constraint(equalToConstant: 7),
             ])
         case .right:
             NSLayoutConstraint.activate([
@@ -240,6 +342,11 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
                 separator.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
                 separator.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
                 separator.widthAnchor.constraint(equalToConstant: 1),
+
+                resizeHandle.topAnchor.constraint(equalTo: contentView.topAnchor),
+                resizeHandle.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+                resizeHandle.centerXAnchor.constraint(equalTo: separator.centerXAnchor),
+                resizeHandle.widthAnchor.constraint(equalToConstant: 7),
             ])
         }
     }
@@ -270,10 +377,13 @@ private final class TerminalVerticalTabButton: NSView {
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let selectedIndicator = NSView()
+    private var dragPreviewWindow: NSWindow?
     private var isSelected: Bool
     private var isHovering = false {
         didSet { updateAppearance() }
     }
+
+    var representedWindow: NSWindow? { targetWindow }
 
     init(
         title: String,
@@ -334,16 +444,24 @@ private final class TerminalVerticalTabButton: NSView {
                 if hypot(deltaX, deltaY) > 4 {
                     didDrag = true
                     alphaValue = 0.75
+                    showDragPreviewIfNeeded()
+                    updateDragPreviewPosition(for: nextEvent)
                     tabBar?.showDropIndicator(for: nextEvent)
                 }
 
             case .leftMouseUp:
                 alphaValue = 1
+                closeDragPreview()
                 tabBar?.hideDropIndicator()
                 if didDrag,
                    let targetWindow,
-                   let dropIndex = tabBar?.dropIndex(for: nextEvent) {
-                    tabBar?.moveTab(targetWindow, toDropIndex: dropIndex)
+                   let tabBar {
+                    if tabBar.canReorder(at: nextEvent),
+                       let dropIndex = tabBar.dropIndex(for: nextEvent) {
+                        tabBar.moveTab(targetWindow, toDropIndex: dropIndex)
+                    } else {
+                        tabBar.detachTab(targetWindow, at: nextEvent)
+                    }
                 } else {
                     selectTab()
                 }
@@ -355,6 +473,7 @@ private final class TerminalVerticalTabButton: NSView {
         }
 
         alphaValue = 1
+        closeDragPreview()
         tabBar?.hideDropIndicator()
         selectTab()
     }
@@ -371,11 +490,31 @@ private final class TerminalVerticalTabButton: NSView {
 
     private var tabContextMenu: NSMenu {
         let menu = NSMenu()
+        let tabCount = hostWindow?.tabGroup?.windows.count ?? 1
 
         let closeItem = NSMenuItem(title: "Close Tab", action: #selector(closeTab), keyEquivalent: "")
         closeItem.target = self
         closeItem.setImageIfDesired(systemSymbolName: "xmark")
         menu.addItem(closeItem)
+
+        let closeOtherItem = NSMenuItem(title: "Close Other Tabs", action: #selector(closeOtherTabs), keyEquivalent: "")
+        closeOtherItem.target = self
+        closeOtherItem.isEnabled = tabCount > 1
+        closeOtherItem.setImageIfDesired(systemSymbolName: "xmark")
+        menu.addItem(closeOtherItem)
+
+        let closeRightItem = NSMenuItem(title: "Close Tabs to the Right", action: #selector(closeTabsOnTheRight), keyEquivalent: "")
+        closeRightItem.target = self
+        closeRightItem.isEnabled = hasTabsToTheRight
+        closeRightItem.setImageIfDesired(systemSymbolName: "xmark")
+        menu.addItem(closeRightItem)
+
+        let closeAllItem = NSMenuItem(title: "Close All Tabs", action: #selector(closeAllTabs), keyEquivalent: "")
+        closeAllItem.target = self
+        closeAllItem.setImageIfDesired(systemSymbolName: "xmark")
+        menu.addItem(closeAllItem)
+
+        menu.addItem(.separator())
 
         let renameItem = NSMenuItem(title: "Rename Tab...", action: #selector(renameTab), keyEquivalent: "")
         renameItem.target = self
@@ -383,6 +522,64 @@ private final class TerminalVerticalTabButton: NSView {
         menu.addItem(renameItem)
 
         return menu
+    }
+
+    private var hasTabsToTheRight: Bool {
+        guard let hostWindow,
+              let targetWindow,
+              let windows = hostWindow.tabGroup?.windows,
+              let index = windows.firstIndex(where: { $0 === targetWindow })
+        else { return false }
+
+        return windows.indices.contains { $0 > index }
+    }
+
+    func update(title: String, isSelected: Bool) {
+        titleLabel.stringValue = title
+        self.isSelected = isSelected
+        updateAppearance()
+    }
+
+    private func showDragPreviewIfNeeded() {
+        guard dragPreviewWindow == nil else { return }
+
+        let preview = TerminalVerticalTabDragPreview(title: titleLabel.stringValue, isSelected: isSelected)
+        let window = NSWindow(
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: max(bounds.width, 140),
+                height: TerminalVerticalTabBar.rowHeight
+            ),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = preview
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = true
+        window.ignoresMouseEvents = true
+        window.level = .floating
+        window.alphaValue = 0.92
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.orderFront(nil)
+        dragPreviewWindow = window
+    }
+
+    private func updateDragPreviewPosition(for event: NSEvent) {
+        guard let dragPreviewWindow else { return }
+
+        let screenPoint = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+        var frame = dragPreviewWindow.frame
+        frame.origin.x = screenPoint.x + 12
+        frame.origin.y = screenPoint.y - frame.height / 2
+        dragPreviewWindow.setFrame(frame, display: true)
+    }
+
+    private func closeDragPreview() {
+        dragPreviewWindow?.orderOut(nil)
+        dragPreviewWindow = nil
     }
 
     private func setup(title: String) {
@@ -458,9 +655,127 @@ private final class TerminalVerticalTabButton: NSView {
         controller.closeTab(nil)
     }
 
+    @objc private func closeOtherTabs() {
+        guard let controller = targetWindow?.windowController as? TerminalController else { return }
+        targetWindow?.makeKeyAndOrderFront(nil)
+        controller.closeOtherTabs(nil)
+    }
+
+    @objc private func closeTabsOnTheRight() {
+        guard let controller = targetWindow?.windowController as? TerminalController else { return }
+        targetWindow?.makeKeyAndOrderFront(nil)
+        controller.closeTabsOnTheRight(nil)
+    }
+
+    @objc private func closeAllTabs() {
+        guard let controller = targetWindow?.windowController as? TerminalController else { return }
+        targetWindow?.makeKeyAndOrderFront(nil)
+        controller.closeWindow(nil)
+    }
+
     @objc private func renameTab() {
         guard let controller = targetWindow?.windowController as? BaseTerminalController else { return }
         controller.promptTabTitle()
+    }
+}
+
+private final class TerminalVerticalTabDragPreview: NSView {
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let selectedIndicator = NSView()
+    private let isSelected: Bool
+
+    init(title: String, isSelected: Bool) {
+        self.isSelected = isSelected
+        super.init(frame: .zero)
+        setup(title: title)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setup(title: String) {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.backgroundColor = (
+            isSelected
+                ? NSColor.controlAccentColor.withAlphaComponent(0.22)
+                : NSColor.windowBackgroundColor.withAlphaComponent(0.92)
+        ).cgColor
+
+        selectedIndicator.translatesAutoresizingMaskIntoConstraints = false
+        selectedIndicator.wantsLayer = true
+        selectedIndicator.layer?.cornerRadius = 1.5
+        selectedIndicator.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        selectedIndicator.isHidden = !isSelected
+        addSubview(selectedIndicator)
+
+        titleLabel.stringValue = title
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 1
+        titleLabel.textColor = isSelected ? .labelColor : .secondaryLabelColor
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(titleLabel)
+
+        NSLayoutConstraint.activate([
+            selectedIndicator.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            selectedIndicator.centerYAnchor.constraint(equalTo: centerYAnchor),
+            selectedIndicator.widthAnchor.constraint(equalToConstant: 3),
+            selectedIndicator.heightAnchor.constraint(equalToConstant: 18),
+
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+        ])
+    }
+}
+
+private final class TerminalVerticalTabResizeHandle: NSView {
+    weak var tabBar: TerminalVerticalTabBar?
+    private let position: TerminalVerticalTabBar.Position
+    private var lastDragLocation: NSPoint?
+
+    init(position: TerminalVerticalTabBar.Position) {
+        self.position = position
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        lastDragLocation = event.locationInWindow
+        NSCursor.resizeLeftRight.push()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let lastDragLocation else {
+            self.lastDragLocation = event.locationInWindow
+            return
+        }
+
+        let deltaX = event.locationInWindow.x - lastDragLocation.x
+        self.lastDragLocation = event.locationInWindow
+        tabBar?.resize(by: deltaX)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        lastDragLocation = nil
+        NSCursor.pop()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.invalidateCursorRects(for: self)
     }
 }
 

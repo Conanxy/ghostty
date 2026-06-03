@@ -112,7 +112,7 @@ class TerminalViewContainer: NSView {
     }
 
     func reloadVerticalTabBar() {
-        verticalTabBar?.reload()
+        verticalTabBar?.scheduleReload()
     }
 
     private func updateTerminalConstraints() {

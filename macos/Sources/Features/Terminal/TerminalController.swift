@@ -605,10 +605,8 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
 
     func reloadVerticalTabBarsInGroup() {
         guard let window else { return }
-        let windows = window.tabGroup?.windows ?? [window]
-        windows.forEach { window in
-            (window.windowController as? TerminalController)?.terminalViewContainer?.reloadVerticalTabBar()
-        }
+        let visibleWindow = window.tabGroup?.selectedWindow ?? window
+        (visibleWindow.windowController as? TerminalController)?.terminalViewContainer?.reloadVerticalTabBar()
     }
 
     private func fixTabBar() {

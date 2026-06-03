@@ -335,20 +335,25 @@ class TerminalWindow: NSWindow {
     }
 
     func syncNativeTabBarVisibility() {
-        let accessoryView = titlebarAccessoryViewControllers
-            .first(where: { $0.identifier == Self.tabBarIdentifier })?
-            .view
+        let accessoryController = titlebarAccessoryViewControllers
+            .first(where: { $0.identifier == Self.tabBarIdentifier })
+        let accessoryView = accessoryController?.view
+        let accessoryClipView = tabBarView?.firstSuperview(withClassName: "NSTitlebarAccessoryClipView")
+
+        NSLayoutConstraint.deactivate(hiddenNativeTabBarHeightConstraints)
+        hiddenNativeTabBarHeightConstraints.removeAll()
 
         guard derivedConfig.macosTabBarPosition != .top else {
+            accessoryController?.isHidden = false
             tabBarView?.isHidden = false
             accessoryView?.isHidden = false
-            NSLayoutConstraint.deactivate(hiddenNativeTabBarHeightConstraints)
-            hiddenNativeTabBarHeightConstraints.removeAll()
+            accessoryClipView?.isHidden = false
+            restoreNativeTabBarLayout()
             return
         }
 
-        NSLayoutConstraint.deactivate(hiddenNativeTabBarHeightConstraints)
-        hiddenNativeTabBarHeightConstraints = [tabBarView, accessoryView]
+        accessoryController?.isHidden = true
+        hiddenNativeTabBarHeightConstraints = [tabBarView, accessoryView, accessoryClipView]
             .compactMap { $0 }
             .map { view in
                 view.isHidden = true
@@ -357,6 +362,39 @@ class TerminalWindow: NSWindow {
                 return constraint
             }
         NSLayoutConstraint.activate(hiddenNativeTabBarHeightConstraints)
+        titlebarContainer?.needsLayout = true
+        contentView?.needsLayout = true
+        titlebarContainer?.layoutSubtreeIfNeeded()
+        contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func restoreNativeTabBarLayout() {
+        titlebarContainer?.needsLayout = true
+        contentView?.needsLayout = true
+        titlebarContainer?.layoutSubtreeIfNeeded()
+        contentView?.layoutSubtreeIfNeeded()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard self.derivedConfig.macosTabBarPosition == .top else { return }
+
+            self.titlebarAccessoryViewControllers
+                .first(where: { $0.identifier == Self.tabBarIdentifier })?
+                .isHidden = false
+            self.tabBarView?.isHidden = false
+            self.titlebarAccessoryViewControllers
+                .first(where: { $0.identifier == Self.tabBarIdentifier })?
+                .view
+                .isHidden = false
+            self.tabBarView?
+                .firstSuperview(withClassName: "NSTitlebarAccessoryClipView")?
+                .isHidden = false
+
+            self.titlebarContainer?.needsLayout = true
+            self.contentView?.needsLayout = true
+            self.titlebarContainer?.layoutSubtreeIfNeeded()
+            self.contentView?.layoutSubtreeIfNeeded()
+        }
     }
 
     func syncDerivedConfig(_ config: Ghostty.Config) {
