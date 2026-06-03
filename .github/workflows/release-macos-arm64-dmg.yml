@@ -89,25 +89,20 @@ jobs:
 
       - name: Create DMG
         run: |
-          npm install --global create-dmg
-          rm -f Ghostty*.dmg "$DMG_NAME"
-          create-dmg \
-            --volname "Ghostty" \
-            --window-pos 200 120 \
-            --window-size 660 420 \
-            --icon-size 96 \
-            --icon "Ghostty.app" 180 170 \
-            --app-drop-link 480 170 \
-            "$BUILD_DIR/ReleaseLocal/Ghostty.app" \
-            ./
+          DMG_STAGING_DIR="/tmp/ghostty-dmg"
+          rm -rf "$DMG_STAGING_DIR" "$DMG_NAME"
+          mkdir -p "$DMG_STAGING_DIR"
 
-          shopt -s nullglob
-          generated=(Ghostty*.dmg)
-          if [[ ${#generated[@]} -ne 1 ]]; then
-            printf 'Expected exactly one generated DMG, found %s\n' "${#generated[@]}"
-            exit 1
-          fi
-          mv "${generated[0]}" "$DMG_NAME"
+          ditto "$BUILD_DIR/ReleaseLocal/Ghostty.app" "$DMG_STAGING_DIR/Ghostty.app"
+          ln -s /Applications "$DMG_STAGING_DIR/Applications"
+
+          hdiutil create \
+            -volname "Ghostty" \
+            -fs HFS+ \
+            -format UDZO \
+            -srcfolder "$DMG_STAGING_DIR" \
+            "$DMG_NAME"
+          hdiutil verify "$DMG_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
