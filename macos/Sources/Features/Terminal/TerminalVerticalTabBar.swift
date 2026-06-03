@@ -10,6 +10,7 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
     static let minWidth: CGFloat = 120
     static let maxWidth: CGFloat = 320
     static let rowHeight: CGFloat = 32
+    private static var sharedWidth: CGFloat = defaultWidth
 
     private weak var hostWindow: TerminalWindow?
     let position: Position
@@ -23,7 +24,7 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
     private var dropIndicatorTopConstraint: NSLayoutConstraint?
     private var reloadScheduled = false
 
-    var preferredWidth: CGFloat { widthConstraint?.constant ?? Self.defaultWidth }
+    var preferredWidth: CGFloat { widthConstraint?.constant ?? Self.sharedWidth }
 
     init(hostWindow: TerminalWindow, position: Position) {
         self.hostWindow = hostWindow
@@ -98,17 +99,58 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
         }
     }
 
+    func reloadTabBarsInGroup() {
+        guard let hostWindow else {
+            scheduleReload()
+            return
+        }
+
+        let windows = hostWindow.tabGroup?.windows ?? [hostWindow]
+        for window in windows {
+            (window.windowController as? TerminalController)?
+                .terminalViewContainer?
+                .reloadVerticalTabBar()
+        }
+    }
+
+    func setWidth(_ width: CGFloat) {
+        let newWidth = Self.clampedWidth(width)
+        guard widthConstraint?.constant != newWidth else { return }
+
+        widthConstraint?.constant = newWidth
+        invalidateIntrinsicContentSize()
+        superview?.invalidateIntrinsicContentSize()
+        superview?.layoutSubtreeIfNeeded()
+    }
+
     fileprivate func resize(by deltaX: CGFloat) {
         guard let widthConstraint else { return }
 
         let directionMultiplier: CGFloat = position == .left ? 1 : -1
         let proposedWidth = widthConstraint.constant + deltaX * directionMultiplier
-        let newWidth = min(max(proposedWidth, Self.minWidth), Self.maxWidth)
+        let newWidth = Self.clampedWidth(proposedWidth)
         guard newWidth != widthConstraint.constant else { return }
 
-        widthConstraint.constant = newWidth
-        invalidateIntrinsicContentSize()
-        superview?.layoutSubtreeIfNeeded()
+        Self.sharedWidth = newWidth
+        applySharedWidthToTabGroup()
+    }
+
+    private static func clampedWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, minWidth), maxWidth)
+    }
+
+    private func applySharedWidthToTabGroup() {
+        guard let hostWindow else {
+            setWidth(Self.sharedWidth)
+            return
+        }
+
+        let windows = hostWindow.tabGroup?.windows ?? [hostWindow]
+        for window in windows {
+            (window.windowController as? TerminalController)?
+                .terminalViewContainer?
+                .setVerticalTabBarWidth(Self.sharedWidth)
+        }
     }
 
     fileprivate func dropIndex(for event: NSEvent) -> Int? {
@@ -288,7 +330,7 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
 
         dropIndicatorTopConstraint = dropIndicator.topAnchor.constraint(equalTo: topAnchor)
 
-        let widthConstraint = widthAnchor.constraint(equalToConstant: Self.defaultWidth)
+        let widthConstraint = widthAnchor.constraint(equalToConstant: Self.sharedWidth)
         self.widthConstraint = widthConstraint
 
         NSLayoutConstraint.activate([
@@ -370,7 +412,7 @@ final class TerminalVerticalTabBar: NSVisualEffectView {
     }
 }
 
-private final class TerminalVerticalTabButton: NSView {
+private final class TerminalVerticalTabButton: NSView, NSTextFieldDelegate {
     private weak var targetWindow: NSWindow?
     private weak var hostWindow: TerminalWindow?
     private weak var tabBar: TerminalVerticalTabBar?
@@ -378,6 +420,7 @@ private final class TerminalVerticalTabButton: NSView {
     private let closeButton = NSButton()
     private let selectedIndicator = NSView()
     private var dragPreviewWindow: NSWindow?
+    private var titleEditor: NSTextField?
     private var isSelected: Bool
     private var isHovering = false {
         didSet { updateAppearance() }
@@ -433,6 +476,15 @@ private final class TerminalVerticalTabButton: NSView {
             return
         }
 
+        if titleEditor != nil {
+            finishInlineTitleEdit(commit: true)
+        }
+
+        if event.clickCount >= 2 {
+            beginInlineTitleEdit()
+            return
+        }
+
         let startLocation = event.locationInWindow
         var didDrag = false
 
@@ -484,7 +536,10 @@ private final class TerminalVerticalTabButton: NSView {
             return
         }
 
-        selectTab()
+        if titleEditor != nil {
+            finishInlineTitleEdit(commit: true)
+        }
+
         NSMenu.popUpContextMenu(tabContextMenu, with: event, for: self)
     }
 
@@ -674,8 +729,131 @@ private final class TerminalVerticalTabButton: NSView {
     }
 
     @objc private func renameTab() {
-        guard let controller = targetWindow?.windowController as? BaseTerminalController else { return }
-        controller.promptTabTitle()
+        beginInlineTitleEdit()
+    }
+
+    @discardableResult
+    private func beginInlineTitleEdit() -> Bool {
+        guard titleEditor == nil,
+              let targetWindow,
+              let controller = targetWindow.windowController as? BaseTerminalController
+        else {
+            titleEditor?.currentEditor()?.selectAll(nil)
+            return titleEditor != nil
+        }
+
+        let editor = NSTextField(frame: .zero)
+        editor.delegate = self
+        editor.stringValue = controller.titleOverride ?? targetWindow.title
+        editor.font = titleLabel.font
+        editor.textColor = titleLabel.textColor
+        editor.alignment = titleLabel.alignment
+        editor.isBordered = false
+        editor.isBezeled = false
+        editor.drawsBackground = false
+        editor.focusRingType = .none
+        editor.lineBreakMode = .byClipping
+        if let editorCell = editor.cell as? NSTextFieldCell {
+            editorCell.wraps = false
+            editorCell.usesSingleLineMode = true
+            editorCell.isScrollable = true
+        }
+
+        titleEditor = editor
+        titleLabel.isHidden = true
+        closeButton.isHidden = true
+        addSubview(editor, positioned: .above, relativeTo: titleLabel)
+        editor.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            editor.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            editor.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            editor.centerYAnchor.constraint(equalTo: centerYAnchor),
+            editor.heightAnchor.constraint(equalToConstant: 22),
+        ])
+
+        DispatchQueue.main.async { [weak self, weak editor] in
+            guard let self,
+                  let editor,
+                  self.titleEditor === editor
+            else { return }
+
+            window?.makeFirstResponder(editor)
+            if let fieldEditor = editor.currentEditor() as? NSTextView,
+               let editorFont = editor.font {
+                fieldEditor.font = editorFont
+                var typingAttributes = fieldEditor.typingAttributes
+                typingAttributes[.font] = editorFont
+                fieldEditor.typingAttributes = typingAttributes
+            }
+            editor.currentEditor()?.selectAll(nil)
+        }
+
+        return true
+    }
+
+    private func finishInlineTitleEdit(commit: Bool) {
+        guard let editor = titleEditor else { return }
+
+        let editedTitle = editor.stringValue
+        let editedWindow = targetWindow
+        titleEditor = nil
+        editor.delegate = nil
+
+        if let responderWindow = editor.window ?? window {
+            if let currentEditor = editor.currentEditor(), responderWindow.firstResponder === currentEditor {
+                responderWindow.makeFirstResponder(nil)
+            } else if responderWindow.firstResponder === editor {
+                responderWindow.makeFirstResponder(nil)
+            }
+        }
+
+        editor.removeFromSuperview()
+        titleLabel.isHidden = false
+        closeButton.isHidden = false
+        updateAppearance()
+
+        if commit,
+           let editedWindow,
+           let controller = editedWindow.windowController as? BaseTerminalController {
+            controller.titleOverride = editedTitle.isEmpty ? nil : editedTitle
+            tabBar?.reloadTabBarsInGroup()
+        }
+
+        restoreTerminalFocus()
+    }
+
+    private func restoreTerminalFocus() {
+        guard let responderWindow = window,
+              let controller = responderWindow.windowController as? BaseTerminalController,
+              let focusedSurface = controller.focusedSurface
+        else { return }
+
+        responderWindow.makeFirstResponder(focusedSurface)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === titleEditor else { return false }
+
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            finishInlineTitleEdit(commit: true)
+            return true
+        }
+
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            finishInlineTitleEdit(commit: false)
+            return true
+        }
+
+        return false
+    }
+
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let titleEditor,
+              let finishedEditor = obj.object as? NSTextField,
+              finishedEditor === titleEditor
+        else { return }
+
+        finishInlineTitleEdit(commit: true)
     }
 }
 

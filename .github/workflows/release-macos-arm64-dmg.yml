@@ -131,6 +131,8 @@ jobs:
           - Supports vertical tab drag reordering.
           - Supports dragging a vertical tab out to create a new window, with a floating drag preview.
           - Supports resizing the vertical tab bar by dragging the divider between the tab bar and terminal.
+          - Shares the resized vertical tab bar width across tabs in the same tab group.
+          - Supports inline vertical tab renaming by double-clicking a tab, with Enter to save and Esc to cancel.
           - Adds vertical tab context menu actions: close tab, close other tabs, close tabs to the right, close all tabs, and rename tab.
           - Fixes native top tab bar spacing when switching between top and vertical tab positions.
           - Rewrites the README to document this fork and its changes only.

@@ -115,6 +115,10 @@ class TerminalViewContainer: NSView {
         verticalTabBar?.scheduleReload()
     }
 
+    func setVerticalTabBarWidth(_ width: CGFloat) {
+        verticalTabBar?.setWidth(width)
+    }
+
     private func updateTerminalConstraints() {
         NSLayoutConstraint.deactivate(terminalConstraints)
         terminalConstraints.removeAll()
